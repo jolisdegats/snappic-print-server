@@ -1,0 +1,13 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">Photobooth Print Server</name>
+  <service>
+    <type>_snappic_2._tcp</type>
+    <port>3000</port>
+    <txt-record>txtvers=1</txt-record>
+    <txt-record>note=Snappic Print Server</txt-record>
+    <txt-record>adminurl=http://snappic-pi.local:3000</txt-record>
+    <txt-record>product=(Snappic Print Server)</txt-record>
+  </service>
+</service-group>

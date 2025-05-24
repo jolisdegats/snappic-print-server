@@ -1,0 +1,15 @@
+{
+  "name": "snappic-print-server",
+  "version": "1.0.0",
+  "description": "Raspberry Pi print server for Snappic with CUPS integration.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "multer": "^2.0.0"
+  },
+  "author": "",
+  "license": "MIT"
+}

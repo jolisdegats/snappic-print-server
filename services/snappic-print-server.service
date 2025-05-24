@@ -1,0 +1,13 @@
+[Unit]
+Description=Snappic Print Server
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/node /home/admin/snappic-print-server/server.js
+WorkingDirectory=/home/admin/snappic-print-server
+Restart=always
+User=admin
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

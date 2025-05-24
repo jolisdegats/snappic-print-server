@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Snappic Pi Config</title>
+  <style>
+    body { font-family: sans-serif; max-width: 400px; margin: 0 auto; padding: 2rem; }
+    input, select, button { width: 100%; padding: 0.5rem; font-size: 1.1rem; }
+    .margin-group { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.5rem; }
+    .margin-group-title { flex: 1;margin-bottom: 0.2rem; }
+    .test-print-section { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #ccc; }
+    #testPrintResult { margin-top: 0.5rem; font-size: 1em; }
+    input[type="checkbox"] { width: auto; margin-right: 0.5em; }
+  </style>
+</head>
+<body>
+  <h2>Snappic Pi Config</h2>
+  <form id="configForm">
+    <div class="margin-group">
+      <h3 class="margin-group-title">Printer:</h3>
+      <label>
+        <select id="printer"></select>
+      </label>
+      <div id="printerStatus" style="margin-top: 0.5rem; padding: 0.5rem; background: #f5f5f5; border-radius: 4px; display: none;">
+        <div>Status: <span id="printerStatusText">Loading...</span></div>
+        <div>Prints remaining: <span id="remainingPrints">Loading...</span></div>
+        <div>Media type: <span id="mediaType">Loading...</span></div>
+        <div>Head temperature: <span id="headTemperature">Loading...</span></div>
+        <div>Media temperature: <span id="mediaTemperature">Loading...</span></div>
+        <div>Paper end: <span id="paperEnd">Loading...</span></div>
+        <div>Paper empty: <span id="paperEmpty">Loading...</span></div>
+      </div>
+    </div>
+
+    <div class="margin-group">
+      <h3 class="margin-group-title">Margins:</h3>
+      <div style="display: flex; flex-direction: row; gap: 0.5rem;">
+      <label>Top
+        <input type="number" id="top" />
+      </label>
+      <label>Bottom
+        <input type="number" id="bottom" />
+      </label>
+      <label>Left
+        <input type="number" id="left" />
+      </label>
+      <label>Right
+        <input type="number" id="right" />
+      </label>
+    </div>
+    </div>
+    <div class="margin-group">
+      <h3 class="margin-group-title">Orientation:</h3>
+      <label style="display: flex; align-items: center; gap: 0.5em;">
+        <input type="checkbox" id="transpose" /> Print in landscape orientation
+      </label>
+    </div>
+   <div class="margin-group">
+      <h3 class="margin-group-title">Paper Format:</h3>
+    <label>
+      <select id="paperSize">
+        <option value="4x6">4x6</option>
+        <option value="2x6">2x6 (strips)</option>
+      </select>
+    </label>
+    </div> 
+    <div class="margin-group" id="printerOptionsGroup" style="display:none;">
+      <h3 class="margin-group-title">Advanced Printer Options:</h3>
+      <div id="printerOptionsForm"></div>
+    </div>
+    <button type="submit">Save</button>
+  </form>
+
+  <div class="test-print-section">
+    <h2>Test Print</h2>
+    <form id="testPrintForm" enctype="multipart/form-data" method="POST">
+      <input type="file" id="testPhoto" accept="image/*" required name="photo" style="margin-bottom: 0.5rem;"/>
+      <button type="submit">Test Print</button>
+    </form>
+    <div id="testPrintResult"></div>
+  </div>
+
+  <script>
+    let currentPrinter = null;
+    let currentPrinterOptions = {};
+
+    const DISPLAYED_PRINTER_OPTIONS = [
+      "PageSize",
+      "ColorModel",
+      "StpColorPrecision",
+      "StpPrintSpeed",
+      "StpLaminate",
+      "StpNoCutWaste",
+      "StpDeCurl"
+    ];
+
+    const mediaSizeMap = {
+      'w288h288': '4x4',
+      'w288h432': '4x6',
+      'w324h432': '4.5x6',
+      'w288h216': '4x3',
+      'w324h324': '4.5x4.5',
+      'w324h486': '4.5x6.75',
+      'w324h576': '4.5x8',
+      // Add more as needed
+    };
+
+    function formatNum(n) {
+      return Number(n).toFixed(2).replace(/\\.00$/, '').replace(/(\\.[1-9])0$/, '$1');
+    }
+
+    function singleSize(w, h) {
+      const key = `w${w}h${h}`;
+      return mediaSizeMap[key] || `${formatNum(w/72)}x${formatNum(h/72)}`;
+    }
+
+    function translateMediaSize(code) {
+      // Helper to translate a single WxH code
+      function singleSize(w, h) {
+        const key = `w${w}h${h}`;
+        return mediaSizeMap[key] || `${(w/72).toString().replace(/\\.00$/, '')}x${(h/72).toString().replace(/\\.00$/, '')}`;
+      }
+
+      // Parse the main part and any -divX or _w...h... parts
+      const mainMatch = code.match(/^w(\d+)h(\d+)/);
+      if (!mainMatch) return code;
+
+      let label = singleSize(mainMatch[1], mainMatch[2]);
+
+      // Check for -divX (strips)
+      const divMatch = code.match(/-div(\d+)/);
+      if (divMatch) {
+        label += ` (${divMatch[1]} strips)`;
+      }
+
+      // Check for additional strips (_w...h...)
+      const extraStrips = [];
+      const extraRegex = /_w(\d+)h(\d+)/g;
+      let m;
+      while ((m = extraRegex.exec(code)) !== null) {
+        extraStrips.push(singleSize(m[1], m[2]));
+      }
+      if (extraStrips.length > 0) {
+        label += ' + ' + extraStrips.join(' + ');
+      }
+
+      return label;
+    }
+
+    async function loadConfig() {
+      const res = await fetch('/config');
+      const config = await res.json();
+      document.getElementById('top').value = config.margins.top;
+      document.getElementById('bottom').value = config.margins.bottom;
+      document.getElementById('left').value = config.margins.left;
+      document.getElementById('right').value = config.margins.right;
+      document.getElementById('transpose').checked = config.transpose;
+      document.getElementById('paperSize').value = config.paperSize;
+      if (config.printer) {
+        document.getElementById('printer').value = config.printer;
+        await loadPrinterOptions(config.printer);
+      }
+    }
+
+    async function loadPrinters() {
+      const res = await fetch('/printers');
+      const { printers } = await res.json();
+      const select = document.getElementById('printer');
+      select.innerHTML = '';
+      printers.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = p;
+        select.appendChild(opt);
+      });
+      select.addEventListener('change', e => {
+        loadPrinterOptions(e.target.value);
+      });
+    }
+
+    async function loadPrinterOptions(printer) {
+      currentPrinter = printer;
+      const group = document.getElementById('printerOptionsGroup');
+      const form = document.getElementById('printerOptionsForm');
+      form.innerHTML = '';
+      if (!printer) {
+        group.style.display = 'none';
+        return;
+      }
+      const res = await fetch(`/printer-options?printer=${encodeURIComponent(printer)}`);
+      if (!res.ok) {
+        group.style.display = 'none';
+        return;
+      }
+      const options = await res.json();
+      currentPrinterOptions = options;
+      Object.entries(options).forEach(([key, opt]) => {
+        if (!DISPLAYED_PRINTER_OPTIONS.includes(key)) return;
+        const label = document.createElement('label');
+        label.textContent = opt.label + ':';
+        if (opt.values.length > 1) {
+          const select = document.createElement('select');
+          select.name = key;
+          opt.values.forEach(v => {
+            const option = document.createElement('option');
+            option.value = v.value;
+            option.textContent = translateMediaSize(v.value);
+            if (v.default) option.selected = true;
+            select.appendChild(option);
+          });
+          label.appendChild(select);
+        } else {
+          // Single value, show as text
+          const span = document.createElement('span');
+          span.textContent = translateMediaSize(opt.values[0].value);
+          label.appendChild(span);
+        }
+        form.appendChild(label);
+      });
+      group.style.display = 'block';
+    }
+
+    document.getElementById('configForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const config = {
+        printer: document.getElementById('printer').value,
+        margins: {
+          top: parseInt(document.getElementById('top').value),
+          bottom: parseInt(document.getElementById('bottom').value),
+          left: parseInt(document.getElementById('left').value),
+          right: parseInt(document.getElementById('right').value),
+        },
+        transpose: document.getElementById('transpose').checked,
+        paperSize: document.getElementById('paperSize').value
+      };
+      await fetch('/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
+      alert('Configuration saved!');
+    });
+
+    document.getElementById('testPrintForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const fileInput = document.getElementById('testPhoto');
+      const file = fileInput.files[0];
+      if (!file) return;
+      const formData = new FormData();
+      formData.append('photo', file);
+      // Add advanced printer options
+      const printerOptionsForm = document.getElementById('printerOptionsForm');
+      printerOptionsForm.querySelectorAll('select').forEach(el => {
+       formData.append('printerOption_' + el.name, el.value);
+      });
+      const resultDiv = document.getElementById('testPrintResult');
+      resultDiv.textContent = 'Printing...';
+      try {
+        const res = await fetch('/print', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+          resultDiv.textContent = '✅ Print sent successfully!';
+        } else {
+          resultDiv.textContent = '❌ Print failed: ' + (data.message || 'Unknown error');
+        }
+      } catch (err) {
+        resultDiv.textContent = '❌ Print failed: ' + err.message;
+      }
+    });
+
+    async function loadPrinterStatus() {
+      const statusDiv = document.getElementById('printerStatus');
+      const printer = document.getElementById('printer').value;
+      
+      if (!printer) {
+        statusDiv.style.display = 'none';
+        return;
+      }
+
+      statusDiv.style.display = 'block';
+      try {
+        const res = await fetch('/printer-status');
+        const data = await res.json();
+        if (data.status && data.data) {
+          // Show basic status
+          document.getElementById('printerStatusText').textContent = data.data.gutenprint_status || data.data.cups_status || 'Unknown';
+          
+          // Show detailed status if available
+          const statusFields = {
+            'remaining_prints': 'remainingPrints',
+            'media_type': 'mediaType',
+            'head_temperature': 'headTemperature',
+            'media_temperature': 'mediaTemperature',
+            'paper_end': 'paperEnd',
+            'paper_empty': 'paperEmpty'
+          };
+
+          Object.entries(statusFields).forEach(([key, elementId]) => {
+            const element = document.getElementById(elementId);
+            if (element) {
+              element.textContent = data.data[key] || 'Not available';
+            }
+          });
+
+          // Log detailed status for debugging
+          console.log('Printer status details:', data.data);
+        } else {
+          document.getElementById('printerStatusText').textContent = data.human_error || 'Error getting status';
+          ['remainingPrints', 'mediaType', 'headTemperature', 'mediaTemperature', 'paperEnd', 'paperEmpty'].forEach(id => {
+            const element = document.getElementById(id);
+            if (element) {
+              element.textContent = 'Not available';
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Error loading printer status:', error);
+        document.getElementById('printerStatusText').textContent = 'Error getting status';
+        ['remainingPrints', 'mediaType', 'headTemperature', 'mediaTemperature', 'paperEnd', 'paperEmpty'].forEach(id => {
+          const element = document.getElementById(id);
+          if (element) {
+            element.textContent = 'Not available';
+          }
+        });
+      }
+    }
+
+    // Update status every 30 seconds
+    let statusInterval = null;
+
+    function startStatusUpdates() {
+      if (statusInterval) {
+        clearInterval(statusInterval);
+      }
+      statusInterval = setInterval(loadPrinterStatus, 30000);
+    }
+
+    // Load initial status
+    loadPrinterStatus();
+    startStatusUpdates();
+
+    // Update status when printer changes
+    document.getElementById('printer').addEventListener('change', () => {
+      loadPrinterStatus();
+    });
+
+    loadConfig();
+    loadPrinters();
+  </script>
+</body>
+</html>
