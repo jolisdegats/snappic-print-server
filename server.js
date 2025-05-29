@@ -3,6 +3,7 @@ const multer = require("multer");
 const fs = require("fs");
 const { exec } = require("child_process");
 const path = require("path");
+const { execSync } = require("child_process");
 
 const app = express();
 const PORT = 3000;
@@ -11,18 +12,6 @@ const CONFIG_PATH = "./config.json";
 // Ensure uploads directory exists
 if (!fs.existsSync("uploads")) {
   fs.mkdirSync("uploads");
-}
-
-let config = {
-  printer: "",
-  margins: { top: 0, right: 0, bottom: 0, left: 0 },
-  transpose: false,
-  paperSize: "4x6", // or '2x6'
-  dryRun: false, // Add dry run mode
-};
-
-if (fs.existsSync(CONFIG_PATH)) {
-  config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
 }
 
 // Configure multer for large files
@@ -65,14 +54,88 @@ app.use((err, req, res, next) => {
   });
 });
 
+let persistentConfig = {};
+if (fs.existsSync(CONFIG_PATH)) {
+  try {
+    const loaded = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
+    if (typeof loaded.dryRun === "boolean")
+      persistentConfig.dryRun = loaded.dryRun;
+    if (typeof loaded.defaultPrinter === "string")
+      persistentConfig.defaultPrinter = loaded.defaultPrinter;
+  } catch (e) {
+    console.error("Failed to load config.json, using default dryRun: true");
+  }
+}
+
 app.get("/config", (req, res) => {
-  res.json(config);
+  res.json({
+    dryRun: persistentConfig.dryRun,
+    defaultPrinter: persistentConfig.defaultPrinter,
+  });
 });
 
 app.post("/config", (req, res) => {
-  config = req.body;
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
-  res.json({ status: "saved" });
+  console.log("/config POST received:", JSON.stringify(req.body, null, 2));
+  // Only update dryRun if present
+  if (typeof req.body.dryRun !== "undefined") {
+    let val = req.body.dryRun;
+    if (typeof val === "string") val = val === "true";
+    persistentConfig.dryRun = val;
+  }
+  // Update or clear defaultPrinter
+  if (typeof req.body.defaultPrinter !== "undefined") {
+    if (req.body.defaultPrinter && req.body.defaultPrinter !== "") {
+      persistentConfig.defaultPrinter = req.body.defaultPrinter;
+    } else {
+      delete persistentConfig.defaultPrinter;
+    }
+  }
+  // Apply printer options to CUPS if present
+  if (req.body.printer && req.body.printerOptions) {
+    const optionsEntries = Object.entries(req.body.printerOptions);
+    if (optionsEntries.length === 0) {
+      console.warn("printerOptions is empty; nothing to apply to CUPS");
+    } else {
+      const optionsStr = optionsEntries
+        .map(([key, value]) => `-o ${key}=${value}`)
+        .join(" ");
+      const cmd = `lpoptions -p ${req.body.printer} ${optionsStr}`;
+      console.log("Running lpoptions command:", cmd);
+      exec(cmd, (err, stdout, stderr) => {
+        if (err) {
+          console.error("Failed to set printer options in CUPS:", err, stderr);
+          fs.writeFileSync(
+            CONFIG_PATH,
+            JSON.stringify(persistentConfig, null, 2)
+          );
+          return res.status(500).json({
+            status: "error",
+            message: "Failed to set printer options in CUPS",
+            dryRun: persistentConfig.dryRun,
+            defaultPrinter: persistentConfig.defaultPrinter,
+            stderr: stderr,
+          });
+        }
+        console.log("lpoptions stdout:", stdout);
+        fs.writeFileSync(
+          CONFIG_PATH,
+          JSON.stringify(persistentConfig, null, 2)
+        );
+        res.json({
+          status: "ok",
+          dryRun: persistentConfig.dryRun,
+          defaultPrinter: persistentConfig.defaultPrinter,
+        });
+      });
+      return;
+    }
+  }
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(persistentConfig, null, 2));
+  res.json({
+    status: "ok",
+    dryRun: persistentConfig.dryRun,
+    defaultPrinter: persistentConfig.defaultPrinter,
+  });
 });
 
 app.get("/printers", (req, res) => {
@@ -84,9 +147,7 @@ app.get("/printers", (req, res) => {
 });
 
 app.post("/print/image", upload.single("photo"), (req, res) => {
-  console.log("🧾 Incoming /print/image request headers:", req.headers);
   console.log("🧾 Incoming /print/image request body:", req.body);
-  console.log("📁 File info:", req.file);
 
   let filePath;
 
@@ -123,11 +184,10 @@ app.post("/print/image", upload.single("photo"), (req, res) => {
     });
   }
 
-  // Snappic app seems to always send strip prints
-  const marginFlags = `-o page-top=${config.margins.top} -o page-bottom=${config.margins.bottom} -o page-left=${config.margins.left} -o page-right=${config.margins.right}`;
-  const orientationFlag = config.transpose ? "-o landscape" : "";
-  const printerFlag = config.printer ? `-d ${config.printer}` : "";
-  const paperSizeFlag = "-o media=4x6 -o number-up=2"; // Always use 2x6 for strips
+  let printerFlag = "";
+  if (persistentConfig.defaultPrinter) {
+    printerFlag = `-d ${persistentConfig.defaultPrinter}`;
+  }
 
   // Advanced printer options from form
   let advancedFlags = "";
@@ -140,17 +200,21 @@ app.post("/print/image", upload.single("photo"), (req, res) => {
     });
   }
 
-  // In dry run mode, we'll just simulate the print job
-  if (config.dryRun) {
+  // Handle number_of_copies or copies
+  let copiesFlag = "";
+  if (req.body.number_of_copies || req.body.copies) {
+    const copies = req.body.number_of_copies || req.body.copies;
+    if (!isNaN(Number(copies)) && Number(copies) > 0) {
+      copiesFlag = ` -n ${Number(copies)}`;
+    }
+  }
+
+  if (persistentConfig.dryRun) {
     console.log(
       "🖨️ [DRY RUN] Would execute print command:",
-      `lp ${printerFlag} ${paperSizeFlag} ${marginFlags} ${orientationFlag}${advancedFlags} "${filePath}"`
+      `lp ${printerFlag}${copiesFlag}${advancedFlags} "${filePath}"`
     );
-
-    // Clean up the file
     fs.unlink(filePath, () => {});
-
-    // Send success response in the exact format expected
     return res.status(200).json({
       status: true,
       error: null,
@@ -159,13 +223,11 @@ app.post("/print/image", upload.single("photo"), (req, res) => {
     });
   }
 
-  const cmd = `lp ${printerFlag} ${paperSizeFlag} ${marginFlags} ${orientationFlag}${advancedFlags} "${filePath}"`;
+  const cmd = `lp ${printerFlag}${copiesFlag}${advancedFlags} "${filePath}"`;
   console.log("🖨️ Executing print command:", cmd);
 
   exec(cmd, (err, stdout, stderr) => {
-    // Clean up the file
     fs.unlink(filePath, () => {});
-
     if (err) {
       console.error("❌ Print error:", stderr.trim());
       return res.status(500).json({
@@ -175,9 +237,7 @@ app.post("/print/image", upload.single("photo"), (req, res) => {
         data: null,
       });
     }
-
     console.log("✅ Print success:", stdout.trim());
-    // Send success response in the exact format expected
     res.status(200).json({
       status: true,
       error: null,
@@ -192,6 +252,24 @@ app.get("/printer-options", (req, res) => {
   const printer = req.query.printer;
   if (!printer)
     return res.status(400).json({ error: "Missing printer parameter" });
+  // Get current default options
+  let currentOptionsMap = {};
+  let markerMessage = null;
+  try {
+    const currentOptions = execSync(`lpoptions -p ${printer}`).toString();
+    currentOptions.split(/\s+/).forEach((pair) => {
+      const [key, value] = pair.split("=");
+      if (key && value) {
+        currentOptionsMap[key.trim().toLowerCase()] = value.trim();
+        if (key.trim().toLowerCase() === "marker-message") {
+          markerMessage = value.trim();
+        }
+      }
+    });
+  } catch (e) {
+    // Ignore if fails, just means no defaults set
+  }
+  console.log("[printer-options] currentOptionsMap:", currentOptionsMap);
   exec(`lpoptions -l -p ${printer}`, (err, stdout) => {
     if (err)
       return res.status(500).json({ error: "Error fetching printer options" });
@@ -204,93 +282,25 @@ app.get("/printer-options", (req, res) => {
       if (match) {
         const key = match[1];
         const label = match[2] || key;
+        const keyNorm = key.toLowerCase();
+        console.log(
+          `[printer-options] Parsing key: '${key}' (normalized: '${keyNorm}')`
+        );
         const values = match[3].split(/\s+/).map((v) => {
-          return { value: v.replace(/^\*/, ""), default: v.startsWith("*") };
+          const value = v.replace(/^\*/, "");
+          return {
+            value: value,
+            default:
+              v.startsWith("*") ||
+              value.toLowerCase() ===
+                (currentOptionsMap[keyNorm] || "").toLowerCase(),
+          };
         });
         options[key] = { label, values };
       }
     });
-    res.json(options);
+    res.json({ ...options, markerMessage });
   });
-});
-
-// Endpoint to get printer status and remaining prints
-app.get("/printer-status", (req, res) => {
-  const printer = config.printer || "QW410"; // Default to QW410 if no printer specified
-
-  // Get detailed printer status using ipptool
-  exec(
-    `ipptool -tv ipp://localhost:631/printers/${printer} get-printer-attributes.test`,
-    (err, ippStdout) => {
-      if (err) {
-        console.error("❌ Error getting IPP status:", err);
-        // Fall back to CUPS status
-        exec(`lpstat -p ${printer} -l`, (err, stdout) => {
-          if (err) {
-            console.error("❌ Error getting CUPS status:", err);
-            return res.status(500).json({
-              status: false,
-              error: "Error getting printer status",
-              human_error: "Printer is offline or not responding",
-              data: null,
-            });
-          }
-
-          res.json({
-            status: true,
-            error: null,
-            human_error: null,
-            data: {
-              printer: printer,
-              status: stdout.trim(),
-              cups_status: stdout.trim(),
-            },
-          });
-        });
-        return;
-      }
-
-      // Parse IPP output
-      const status = {
-        printer: printer,
-        ipp_status: ippStdout.trim(),
-      };
-
-      // Extract specific status information
-      const lines = ippStdout.split("\n");
-      lines.forEach((line) => {
-        if (line.includes("marker-message")) {
-          const match = line.match(
-            /marker-message \(textWithoutLanguage\) = (.+)/
-          );
-          if (match) {
-            status.remaining_prints_message = match[1];
-          }
-        }
-        if (line.includes("printer-state")) {
-          const match = line.match(/printer-state \(enum\) = (.+)/);
-          if (match) {
-            status.printer_state = match[1];
-          }
-        }
-        if (line.includes("printer-state-message")) {
-          const match = line.match(
-            /printer-state-message \(textWithoutLanguage\) = (.+)/
-          );
-          if (match) {
-            status.printer_state_message = match[1];
-          }
-        }
-      });
-
-      res.json({
-        status: true,
-        error: null,
-        human_error: null,
-        data: status,
-      });
-    }
-  );
 });
 
 app.listen(PORT, "0.0.0.0", () => {

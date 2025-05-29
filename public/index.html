@@ -17,57 +17,20 @@
   <form id="configForm">
     <div class="margin-group">
       <h3 class="margin-group-title">Printer:</h3>
-      <label>
-      <select id="printer"></select>
-    </label>
-      <div id="printerStatus" style="margin-top: 0.5rem; padding: 0.5rem; background: #f5f5f5; border-radius: 4px; display: none;">
-        <div>Status: <span id="printerStatusText">Loading...</span></div>
-        <div>Prints remaining: <span id="remainingPrints">Loading...</span></div>
-        <div>Media type: <span id="mediaType">Loading...</span></div>
-        <div>Head temperature: <span id="headTemperature">Loading...</span></div>
-        <div>Media temperature: <span id="mediaTemperature">Loading...</span></div>
-        <div>Paper end: <span id="paperEnd">Loading...</span></div>
-        <div>Paper empty: <span id="paperEmpty">Loading...</span></div>
-      </div>
+      <label style="display: flex; align-items: center; gap: 0.5em;">
+        <select id="printer"></select>
+        <span id="defaultPrinterStar" style="font-size:1.5em; color:gold; cursor:pointer; user-select:none;">★</span>
+        <span style="font-size:0.9em;">Set as default</span>
+      </label>
     </div>
 
-    <div class="margin-group">
-      <h3 class="margin-group-title">Margins:</h3>
-      <div style="display: flex; flex-direction: row; gap: 0.5rem;">
-      <label>Top
-        <input type="number" id="top" />
-      </label>
-      <label>Bottom
-        <input type="number" id="bottom" />
-      </label>
-      <label>Left
-        <input type="number" id="left" />
-      </label>
-      <label>Right
-        <input type="number" id="right" />
-    </label>
-    </div>
-    </div>
-    <div class="margin-group">
-      <h3 class="margin-group-title">Orientation:</h3>
-      <label style="display: flex; align-items: center; gap: 0.5em;">
-        <input type="checkbox" id="transpose" /> Print in landscape orientation
-    </label>
-    </div>
-   <div class="margin-group">
-      <h3 class="margin-group-title">Paper Format:</h3>
-    <label>
-      <select id="paperSize">
-        <option value="4x6">4x6</option>
-        <option value="2x6">2x6 (strips)</option>
-      </select>
-    </label>
-    </div> 
     <div class="margin-group" id="printerOptionsGroup" style="display:none;">
       <h3 class="margin-group-title">Advanced Printer Options:</h3>
       <div id="printerOptionsForm"></div>
+      <label style="display: flex; align-items: center; gap: 0.5em; margin-top: 0.5em;">
+        <input type="checkbox" id="dryRunCheckbox" /> Dry Run (simulate print only)
+      </label>
     </div>
-    <button type="submit">Save</button>
   </form>
 
   <div class="test-print-section">
@@ -82,6 +45,7 @@
   <script>
     let currentPrinter = null;
     let currentPrinterOptions = {};
+    let isDefaultPrinter = false;
 
     const DISPLAYED_PRINTER_OPTIONS = [
       "PageSize",
@@ -146,21 +110,6 @@
       return label;
     }
 
-    async function loadConfig() {
-      const res = await fetch('/config');
-      const config = await res.json();
-      document.getElementById('top').value = config.margins.top;
-      document.getElementById('bottom').value = config.margins.bottom;
-      document.getElementById('left').value = config.margins.left;
-      document.getElementById('right').value = config.margins.right;
-      document.getElementById('transpose').checked = config.transpose;
-      document.getElementById('paperSize').value = config.paperSize;
-      if (config.printer) {
-        document.getElementById('printer').value = config.printer;
-        await loadPrinterOptions(config.printer);
-      }
-    }
-
     async function loadPrinters() {
       const res = await fetch('/printers');
       const { printers } = await res.json();
@@ -174,7 +123,17 @@
       });
       select.addEventListener('change', e => {
         loadPrinterOptions(e.target.value);
+        loadDefaultPrinterUI();
       });
+      // Set to defaultPrinter if present, else first printer
+      let selectedPrinter = printers[0];
+      const configRes = await fetch('/config');
+      const configData = await configRes.json();
+      if (configData.defaultPrinter && printers.includes(configData.defaultPrinter)) {
+        selectedPrinter = configData.defaultPrinter;
+      }
+      select.value = selectedPrinter;
+      await loadPrinterOptions(selectedPrinter);
     }
 
     async function loadPrinterOptions(printer) {
@@ -193,6 +152,21 @@
       }
       const options = await res.json();
       currentPrinterOptions = options;
+      // Display markerMessage (remaining prints) if present
+      const markerDivId = 'markerMessageDiv';
+      let markerDiv = document.getElementById(markerDivId);
+      if (markerDiv) markerDiv.remove();
+      if (options.markerMessage) {
+        markerDiv = document.createElement('div');
+        markerDiv.id = markerDivId;
+        markerDiv.style.marginBottom = '0.5em';
+        markerDiv.style.background = '#f5f5f5';
+        markerDiv.style.padding = '0.5em';
+        markerDiv.style.borderRadius = '4px';
+        markerDiv.style.fontWeight = 'bold';
+        markerDiv.textContent = `Prints remaining: ${options.markerMessage}`;
+        group.insertBefore(markerDiv, form);
+      }
       Object.entries(options).forEach(([key, opt]) => {
         if (!DISPLAYED_PRINTER_OPTIONS.includes(key)) return;
         const label = document.createElement('label');
@@ -207,7 +181,9 @@
             if (v.default) option.selected = true;
             select.appendChild(option);
           });
+          select.addEventListener('change', updateConfigLive);
           label.appendChild(select);
+          select.value = opt.values.find(v => v.default)?.value || opt.values[0].value;
         } else {
           // Single value, show as text
           const span = document.createElement('span');
@@ -219,26 +195,100 @@
       group.style.display = 'block';
     }
 
-    document.getElementById('configForm').addEventListener('submit', async e => {
-      e.preventDefault();
+    async function loadDryRunDefault() {
+      const res = await fetch('/config');
+      const data = await res.json();
+      document.getElementById('dryRunCheckbox').checked = !!data.dryRun;
+    }
+
+    async function loadDefaultPrinterUI() {
+      const res = await fetch('/config');
+      const data = await res.json();
+      const select = document.getElementById('printer');
+      const star = document.getElementById('defaultPrinterStar');
+      function updateStar() {
+        isDefaultPrinter = data.defaultPrinter && select.value === data.defaultPrinter;
+        star.style.opacity = isDefaultPrinter ? 1 : 0.3;
+        star.textContent = '★';
+        star.setAttribute('aria-checked', isDefaultPrinter);
+      }
+      updateStar();
+      // Always update star on printer change
+      if (!select._starListenerAdded) {
+        select.addEventListener('change', () => {
+          // Update isDefaultPrinter based on new selection
+          isDefaultPrinter = data.defaultPrinter && select.value === data.defaultPrinter;
+          star.style.opacity = isDefaultPrinter ? 1 : 0.3;
+          star.setAttribute('aria-checked', isDefaultPrinter);
+        });
+        select._starListenerAdded = true;
+      }
+      // Always update config on star click
+      if (!star._starListenerAdded) {
+        star.addEventListener('click', async () => {
+          isDefaultPrinter = !isDefaultPrinter;
+          star.style.opacity = isDefaultPrinter ? 1 : 0.3;
+          star.setAttribute('aria-checked', isDefaultPrinter);
+          await updateConfigLive();
+        });
+        star._starListenerAdded = true;
+      }
+    }
+
+    async function initializeUI() {
+      await loadPrinters();
+      await loadDryRunDefault();
+      await loadDefaultPrinterUI();
+    }
+    initializeUI();
+
+    // Add live update logic for all options
+    async function updateConfigLive() {
+      // Collect advanced printer options
+      const printerOptions = {};
+      const printerOptionsForm = document.getElementById('printerOptionsForm');
+      printerOptionsForm.querySelectorAll('select').forEach(el => {
+        printerOptions[el.name] = el.value;
+      });
       const config = {
         printer: document.getElementById('printer').value,
-        margins: {
-          top: parseInt(document.getElementById('top').value),
-          bottom: parseInt(document.getElementById('bottom').value),
-          left: parseInt(document.getElementById('left').value),
-          right: parseInt(document.getElementById('right').value),
-        },
-        transpose: document.getElementById('transpose').checked,
-        paperSize: document.getElementById('paperSize').value
+        printerOptions,
+        dryRun: document.getElementById('dryRunCheckbox').checked,
+        defaultPrinter: isDefaultPrinter ? document.getElementById('printer').value : ''
       };
       await fetch('/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config)
       });
-      alert('Configuration saved!');
-    });
+      // Fetch new options from CUPS and update only the <select> values
+      const res = await fetch(`/printer-options?printer=${currentPrinter}`);
+      if (res.ok) {
+        const options = await res.json();
+        Object.entries(options).forEach(([key, opt]) => {
+          if (!DISPLAYED_PRINTER_OPTIONS.includes(key)) return;
+          if (opt.values.length > 1) {
+            const select = printerOptionsForm.querySelector(`select[name="${key}"]`);
+            if (select) {
+              const newDefault = opt.values.find(v => v.default)?.value || opt.values[0].value;
+              select.value = newDefault;
+            }
+          }
+        });
+      }
+      await loadDefaultPrinterUI(); // Keep star in sync
+    }
+
+    // Add event listeners for live update
+    // Printer select
+    const printerSelect = document.getElementById('printer');
+    printerSelect.addEventListener('change', updateConfigLive);
+    // dryRun checkbox
+    const dryRunCheckbox = document.getElementById('dryRunCheckbox');
+    dryRunCheckbox.addEventListener('change', updateConfigLive);
+    // Default printer star
+    const star = document.getElementById('defaultPrinterStar');
+    star.addEventListener('click', updateConfigLive);
 
     document.getElementById('testPrintForm').addEventListener('submit', async e => {
       e.preventDefault();
@@ -252,6 +302,10 @@
       printerOptionsForm.querySelectorAll('select').forEach(el => {
        formData.append('printerOption_' + el.name, el.value);
       });
+      // Add dryRun if checked
+      if (document.getElementById('dryRunCheckbox').checked) {
+        formData.append('dryRun', 'true');
+      }
       const resultDiv = document.getElementById('testPrintResult');
       resultDiv.textContent = 'Printing...';
       try {
@@ -269,85 +323,6 @@
         resultDiv.textContent = '❌ Print failed: ' + err.message;
       }
     });
-
-    async function loadPrinterStatus() {
-      const statusDiv = document.getElementById('printerStatus');
-      const printer = document.getElementById('printer').value;
-      
-      if (!printer) {
-        statusDiv.style.display = 'none';
-        return;
-      }
-
-      statusDiv.style.display = 'block';
-      try {
-        const res = await fetch('/printer-status');
-        const data = await res.json();
-        if (data.status && data.data) {
-          // Show basic status
-          document.getElementById('printerStatusText').textContent = data.data.gutenprint_status || data.data.cups_status || 'Unknown';
-          
-          // Show detailed status if available
-          const statusFields = {
-            'remaining_prints': 'remainingPrints',
-            'media_type': 'mediaType',
-            'head_temperature': 'headTemperature',
-            'media_temperature': 'mediaTemperature',
-            'paper_end': 'paperEnd',
-            'paper_empty': 'paperEmpty'
-          };
-
-          Object.entries(statusFields).forEach(([key, elementId]) => {
-            const element = document.getElementById(elementId);
-            if (element) {
-              element.textContent = data.data[key] || 'Not available';
-            }
-          });
-
-          // Log detailed status for debugging
-          console.log('Printer status details:', data.data);
-        } else {
-          document.getElementById('printerStatusText').textContent = data.human_error || 'Error getting status';
-          ['remainingPrints', 'mediaType', 'headTemperature', 'mediaTemperature', 'paperEnd', 'paperEmpty'].forEach(id => {
-            const element = document.getElementById(id);
-            if (element) {
-              element.textContent = 'Not available';
-            }
-          });
-        }
-      } catch (error) {
-        console.error('Error loading printer status:', error);
-        document.getElementById('printerStatusText').textContent = 'Error getting status';
-        ['remainingPrints', 'mediaType', 'headTemperature', 'mediaTemperature', 'paperEnd', 'paperEmpty'].forEach(id => {
-          const element = document.getElementById(id);
-          if (element) {
-            element.textContent = 'Not available';
-          }
-        });
-      }
-    }
-
-    // Update status every 30 seconds
-    let statusInterval = null;
-
-    function startStatusUpdates() {
-      if (statusInterval) {
-        clearInterval(statusInterval);
-      }
-      statusInterval = setInterval(loadPrinterStatus, 30000);
-    }
-
-    // Load initial status
-    loadPrinterStatus();
-    startStatusUpdates();
-
-    // Update status when printer changes
-    document.getElementById('printer').addEventListener('change', () => {
-      loadPrinterStatus();
-    });
-
-    loadConfig();
-    loadPrinters();
   </script>
 </body>
 </html>

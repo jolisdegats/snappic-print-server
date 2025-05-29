@@ -1,3 +1,5 @@
+cd "$(dirname "$0")/.."
+
 rsync -av \
   public \
   services \

@@ -23,9 +23,19 @@ select uri in "${PRINTER_URIS[@]}"; do
   fi
 done
 
-# List available Gutenprint printer drivers
-echo "Available Gutenprint printer drivers:"
-mapfile -t PRINTER_DRIVERS < <(lpinfo -m | grep -i "gutenprint")
+# List available Gutenprint printer drivers for QW410
+echo "Available Gutenprint printer drivers for QW410:"
+mapfile -t PRINTER_DRIVERS < <(lpinfo -m | grep -i "gutenprint" | grep -i "QW410")
+if [ ${#PRINTER_DRIVERS[@]} -eq 0 ]; then
+  echo "No QW410 Gutenprint drivers found. Showing all Gutenprint drivers."
+  mapfile -t PRINTER_DRIVERS < <(lpinfo -m | grep -i "gutenprint")
+fi
+
+if [ ${#PRINTER_DRIVERS[@]} -gt 20 ]; then
+  echo "Too many drivers found (${#PRINTER_DRIVERS[@]}). Please refine your search."
+  exit 1
+fi
+
 select driver in "${PRINTER_DRIVERS[@]}"; do
   if [ -n "$driver" ]; then
     PRINTER_DRIVER="$driver"

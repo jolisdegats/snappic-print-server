@@ -7,7 +7,7 @@ This project's goal is to reproduce the Snappic Print Server available for MacOS
 - 📡 Bonjour / Avahi service discovery (`Photobooth Print Server`)
 - 📸 HTTP POST `/print/image` endpoint for Snappic iPad app
 - 🖨️ Prints via CUPS + Gutenprint (DNP QW410 supported)
-- 🧰 Configuration UI available on screen or at `http://192.168.2.1:3000` (for some reasons I couldn't make it work on Chrome so it's Safari only)
+- 🧰 Configuration UI available on screen or at http://192.168.1.72:3000 (for some reasons I couldn't make it work on Chrome so it's Safari only)
 
 ## Getting Started
 
@@ -35,12 +35,12 @@ Snappic app should auto-discover the server.
 
 ### 4. Config access
 
-Go to http://192.168.2.1:3000 on the connected device to access the printer config and test print interface.
+Go to http://192.168.1.72:3000 on the connected device to access the printer config and test print interface.
 Don't forget to adjust the config depending on your project.
 
 ### 5. CUPS Interface
 
-CUPS admin panel is accessible on port http://192.168.1.72:631/. Here you'll be able to configure new printers.
+CUPS admin panel is accessible on port http://192.168.1.72:631. Here you'll be able to configure new printers.
 
 ### 5. Let's go!
 
