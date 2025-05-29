@@ -1,5 +1,7 @@
 {
   "printer": "QW410",
+  "printer_uri": "gutenprint53+usb://dnp-qw410/QW4C01000387",
+  "printer_driver": "gutenprint.5.3://dnp-qw410/expert",
   "margins": { "top": 0, "right": 0, "bottom": 0, "left": 0 },
   "transpose": false,
   "paperSize": "4x6",

@@ -17,13 +17,11 @@ Use [Raspberry Pi Imager](https://www.raspberrypi.com/software/), enable SSH if 
 
 ### 2. Set up the server
 
-Connect to your Raspi via SSH and upload the repo. Then launch the setup.sh script.
+Connect to your Raspi via SSH and upload the repo. You can use the script deploy-include.sh in the scripts folder.
+Then launch the setup.sh script from scripts folder on your pi.
 You might need some admin rights
 
 ```bash
-git clone https://github.com/jolisdegats/snappic-print-server.git
-cd snappic-pi-server
-npm install
 chmod +x setup.sh
 ./setup.sh
 ```
@@ -39,6 +37,10 @@ Snappic app should auto-discover the server.
 
 Go to http://192.168.2.1:3000 on the connected device to access the printer config and test print interface.
 Don't forget to adjust the config depending on your project.
+
+### 5. CUPS Interface
+
+CUPS admin panel is accessible on port http://192.168.1.72:631/. Here you'll be able to configure new printers.
 
 ### 5. Let's go!
 

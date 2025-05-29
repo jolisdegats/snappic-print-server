@@ -1,9 +1,6 @@
 #!/bin/bash
-
 set -e
-
-echo "Adding $USER to lpadmin group..."
-sudo usermod -aG lpadmin $USER
+cd "$(dirname "$0")/.."
 
 echo "Updating system..."
 sudo apt update
@@ -12,6 +9,10 @@ sudo apt upgrade -y
 # --- Packages ---
 echo "Installing packages..."
 sudo apt install -y cups printer-driver-gutenprint avahi-daemon nodejs npm jq avahi-utils dnsmasq dhcpcd5
+
+
+echo "Adding $USER to lpadmin group for CUPS access..."
+sudo usermod -aG lpadmin $USER
 
 echo "Ensuring dhcpcd is enabled and running..."
 sudo systemctl enable dhcpcd
@@ -56,10 +57,43 @@ sudo sed -i '/<Location \/>/,/<\/Location>/ s/Order allow,deny/Order allow,deny\
 sudo sed -i '/<Location \/admin>/,/<\/Location>/ s/Order allow,deny/Order allow,deny\n  Allow @local/' "$CUPS_CONF"
 
 # --- Printer Setup Section ---
-echo "Setting up printer from config.json if not already present..."
-PRINTER_NAME=$(jq -r .printer config.json)
-PRINTER_URI="gutenprint53+usb://dnp-qw410/QW4C01000387"
-PRINTER_DRIVER="gutenprint.5.3://dnp-qw410/expert"
+echo "Setting up printer..."
+
+# Check if any Gutenprint printers are available
+PRINTER_URI_COUNT=$(lpinfo -v | grep -i "gutenprint" | wc -l)
+if [ "$PRINTER_URI_COUNT" -eq 0 ]; then
+  echo "WARNING: No Gutenprint-compatible printers detected."
+  echo "Please connect your printer and try again."
+  exit 1
+fi
+
+# List available Gutenprint printer URIs
+echo "Available Gutenprint printer URIs:"
+mapfile -t PRINTER_URIS < <(lpinfo -v | grep -i "gutenprint")
+select uri in "${PRINTER_URIS[@]}"; do
+  if [ -n "$uri" ]; then
+    PRINTER_URI=$(echo "$uri" | awk '{print $2}')
+    break
+  else
+    echo "Invalid selection. Please try again."
+  fi
+done
+
+# List available Gutenprint printer drivers
+echo "Available Gutenprint printer drivers:"
+mapfile -t PRINTER_DRIVERS < <(lpinfo -m | grep -i "gutenprint")
+select driver in "${PRINTER_DRIVERS[@]}"; do
+  if [ -n "$driver" ]; then
+    PRINTER_DRIVER="$driver"
+    break
+  else
+    echo "Invalid selection. Please try again."
+  fi
+done
+
+# Prompt user for printer name
+read -p "Enter a name for your printer: " PRINTER_NAME
+
 # Only add the printer if it doesn't already exist
 if ! lpstat -p | grep -q "$PRINTER_NAME"; then
   echo "Adding printer $PRINTER_NAME with URI $PRINTER_URI and driver $PRINTER_DRIVER..."
@@ -83,6 +117,13 @@ sudo systemctl enable avahi-daemon
 sudo systemctl start avahi-daemon
 sudo systemctl enable snappic-print-server
 sudo systemctl restart snappic-print-server
+
+# --- Setup One-time Printer Setup Service ---
+echo "Setting up one-time printer setup service..."
+sudo cp ./services/printer-setup.service /etc/systemd/system/
+sudo chmod +x ./scripts/printer-setup.sh
+sudo systemctl daemon-reload
+sudo systemctl enable printer-setup.service
 
 # --- Reboot ---
 echo "Ethernet (eth0) will be prioritized over Wi-Fi (wlan0)."

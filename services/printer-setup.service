@@ -1,0 +1,12 @@
+[Unit]
+Description=One-time Printer Setup
+After=network.target cups.service
+
+[Service]
+Type=oneshot
+ExecStart=/path/to/your/printer-setup.sh
+User=admin
+Group=admin
+
+[Install]
+WantedBy=multi-user.target
