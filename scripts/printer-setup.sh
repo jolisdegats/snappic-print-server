@@ -1,8 +1,11 @@
 #!/bin/bash
 set -e
 
-echo "Setting up printer..."
+echo ""
+echo "Please connect your DNP QW410 printer by USB now."
+read -p "Press [Enter] to continue once the printer is connected..."
 
+echo "Setting up printer..."
 # Check if any Gutenprint printers are available
 PRINTER_URI_COUNT=$(lpinfo -v | grep -i "gutenprint" | wc -l)
 if [ "$PRINTER_URI_COUNT" -eq 0 ]; then
@@ -58,6 +61,10 @@ if ! lpstat -p | grep -q "$PRINTER_NAME"; then
 else
   echo "Printer $PRINTER_NAME already exists, skipping add."
 fi
+
+# Fetch supply info
+echo "Fetching supply info..."
+sudo ./scripts/fetch-printer-supplies.sh
 
 # If this was run by the service, disable and remove it
 if systemctl is-active --quiet printer-setup.service; then

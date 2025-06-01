@@ -4,7 +4,7 @@ After=network.target cups.service
 
 [Service]
 Type=oneshot
-ExecStart=/path/to/your/printer-setup.sh
+ExecStart=/home/admin/snappic-print-server/scripts/printer-setup.sh
 User=admin
 Group=admin
 

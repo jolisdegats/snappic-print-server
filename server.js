@@ -33,7 +33,6 @@ app.use(express.static("public"));
 // Add request logging middleware
 app.use((req, res, next) => {
   console.log(`📥 ${new Date().toISOString()} - ${req.method} ${req.url}`);
-  console.log("Headers:", req.headers);
   next();
 });
 
@@ -54,40 +53,33 @@ app.use((err, req, res, next) => {
   });
 });
 
-let persistentConfig = {};
-if (fs.existsSync(CONFIG_PATH)) {
-  try {
-    const loaded = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
-    if (typeof loaded.dryRun === "boolean")
-      persistentConfig.dryRun = loaded.dryRun;
-    if (typeof loaded.defaultPrinter === "string")
-      persistentConfig.defaultPrinter = loaded.defaultPrinter;
-  } catch (e) {
-    console.error("Failed to load config.json, using default dryRun: true");
-  }
-}
-
+// Get config
 app.get("/config", (req, res) => {
+  const config = loadConfig();
   res.json({
-    dryRun: persistentConfig.dryRun,
-    defaultPrinter: persistentConfig.defaultPrinter,
+    dryRun: config.dryRun,
+    defaultPrinter: config.defaultPrinter,
+    approximativeRemaining: config.approximativeRemaining,
+    initialRemaining: config.initialRemaining,
   });
 });
 
+// Set config
 app.post("/config", (req, res) => {
   console.log("/config POST received:", JSON.stringify(req.body, null, 2));
+  const newConfig = loadConfig();
   // Only update dryRun if present
   if (typeof req.body.dryRun !== "undefined") {
     let val = req.body.dryRun;
     if (typeof val === "string") val = val === "true";
-    persistentConfig.dryRun = val;
+    newConfig.dryRun = val;
   }
   // Update or clear defaultPrinter
   if (typeof req.body.defaultPrinter !== "undefined") {
     if (req.body.defaultPrinter && req.body.defaultPrinter !== "") {
-      persistentConfig.defaultPrinter = req.body.defaultPrinter;
+      newConfig.defaultPrinter = req.body.defaultPrinter;
     } else {
-      delete persistentConfig.defaultPrinter;
+      delete newConfig.defaultPrinter;
     }
   }
   // Apply printer options to CUPS if present
@@ -104,40 +96,37 @@ app.post("/config", (req, res) => {
       exec(cmd, (err, stdout, stderr) => {
         if (err) {
           console.error("Failed to set printer options in CUPS:", err, stderr);
-          fs.writeFileSync(
-            CONFIG_PATH,
-            JSON.stringify(persistentConfig, null, 2)
-          );
+          saveConfig(newConfig);
           return res.status(500).json({
             status: "error",
             message: "Failed to set printer options in CUPS",
-            dryRun: persistentConfig.dryRun,
-            defaultPrinter: persistentConfig.defaultPrinter,
+            dryRun: newConfig.dryRun,
+            defaultPrinter: newConfig.defaultPrinter,
             stderr: stderr,
           });
         }
         console.log("lpoptions stdout:", stdout);
-        fs.writeFileSync(
-          CONFIG_PATH,
-          JSON.stringify(persistentConfig, null, 2)
-        );
+        saveConfig(newConfig);
         res.json({
           status: "ok",
-          dryRun: persistentConfig.dryRun,
-          defaultPrinter: persistentConfig.defaultPrinter,
+          dryRun: newConfig.dryRun,
+          defaultPrinter: newConfig.defaultPrinter,
         });
       });
       return;
     }
   }
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(persistentConfig, null, 2));
+  saveConfig(newConfig);
   res.json({
     status: "ok",
-    dryRun: persistentConfig.dryRun,
-    defaultPrinter: persistentConfig.defaultPrinter,
+    dryRun: newConfig.dryRun,
+    defaultPrinter: newConfig.defaultPrinter,
+    approximativeRemaining: newConfig.approximativeRemaining,
+    initialRemaining: newConfig.initialRemaining,
   });
 });
 
+// Get printers
 app.get("/printers", (req, res) => {
   exec("lpstat -p | awk '{print $2}'", (err, stdout) => {
     if (err) return res.status(500).send("Error listing printers");
@@ -146,6 +135,7 @@ app.get("/printers", (req, res) => {
   });
 });
 
+// Print image
 app.post("/print/image", upload.single("photo"), (req, res) => {
   console.log("🧾 Incoming /print/image request body:", req.body);
 
@@ -185,8 +175,9 @@ app.post("/print/image", upload.single("photo"), (req, res) => {
   }
 
   let printerFlag = "";
-  if (persistentConfig.defaultPrinter) {
-    printerFlag = `-d ${persistentConfig.defaultPrinter}`;
+  const config = loadConfig();
+  if (config.defaultPrinter) {
+    printerFlag = `-d ${config.defaultPrinter}`;
   }
 
   // Advanced printer options from form
@@ -209,11 +200,10 @@ app.post("/print/image", upload.single("photo"), (req, res) => {
     }
   }
 
-  if (persistentConfig.dryRun) {
-    console.log(
-      "🖨️ [DRY RUN] Would execute print command:",
-      `lp ${printerFlag}${copiesFlag}${advancedFlags} "${filePath}"`
-    );
+  const cmd = `lp ${printerFlag}${copiesFlag}${advancedFlags} "${filePath}"`;
+
+  if (config.dryRun) {
+    console.log("🖨️ [DRY RUN] Would execute print command:", cmd);
     fs.unlink(filePath, () => {});
     return res.status(200).json({
       status: true,
@@ -223,7 +213,6 @@ app.post("/print/image", upload.single("photo"), (req, res) => {
     });
   }
 
-  const cmd = `lp ${printerFlag}${copiesFlag}${advancedFlags} "${filePath}"`;
   console.log("🖨️ Executing print command:", cmd);
 
   exec(cmd, (err, stdout, stderr) => {
@@ -238,6 +227,10 @@ app.post("/print/image", upload.single("photo"), (req, res) => {
       });
     }
     console.log("✅ Print success:", stdout.trim());
+    if (config.approximativeRemaining > 0) {
+      config.approximativeRemaining -= 1;
+      saveConfig(config);
+    }
     res.status(200).json({
       status: true,
       error: null,
@@ -247,7 +240,7 @@ app.post("/print/image", upload.single("photo"), (req, res) => {
   });
 });
 
-// Endpoint to get printer options
+// Get printer options
 app.get("/printer-options", (req, res) => {
   const printer = req.query.printer;
   if (!printer)
@@ -302,6 +295,45 @@ app.get("/printer-options", (req, res) => {
     res.json({ ...options, markerMessage });
   });
 });
+
+// Refresh supply
+app.post("/refresh-supply", (req, res) => {
+  const scriptPath = path.resolve(
+    __dirname,
+    "scripts/fetch-printer-supplies.sh"
+  );
+  console.log("Running supply script:", `sudo ${scriptPath}`);
+  exec(`sudo ${scriptPath}`, (error, stdout, stderr) => {
+    if (error) {
+      console.error(
+        "❌ Error running fetch-printer-supplies.sh:",
+        error,
+        stderr
+      );
+      return res.status(500).json({ error: stderr || error.message });
+    }
+    // Optionally, parse config.json and return the new value
+    const newConfig = loadConfig();
+    console.log("🔄 Supply refreshed:", newConfig);
+    newConfig.initialRemaining = newConfig.initialRemaining;
+    newConfig.approximativeRemaining = newConfig.approximativeRemaining;
+    saveConfig(newConfig);
+    res.json({
+      initialRemaining: newConfig.initialRemaining,
+      approximativeRemaining: newConfig.approximativeRemaining,
+    });
+  });
+});
+
+// Helper to load config
+function loadConfig() {
+  return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+}
+
+// Helper to save config
+function saveConfig(config) {
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+}
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Snappic print server listening at http://0.0.0.0:${PORT}`);

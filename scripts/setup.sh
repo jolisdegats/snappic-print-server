@@ -8,7 +8,7 @@ sudo apt upgrade -y
 
 # --- Packages ---
 echo "Installing packages..."
-sudo apt install -y cups printer-driver-gutenprint avahi-daemon nodejs npm jq avahi-utils dnsmasq dhcpcd5
+sudo apt install -y cups printer-driver-gutenprint avahi-daemon nodejs npm jq avahi-utils dnsmasq dhcpcd5 python3-usb fzf
 
 
 echo "Adding $USER to lpadmin group for CUPS access..."
@@ -60,6 +60,18 @@ sudo sed -i '/<Location \/admin>/,/<\/Location>/ s/Order allow,deny/Order allow,
 echo "Installing Node.js dependencies..."
 npm install
 
+# --- Make scripts executable ---
+sudo chmod +x ./scripts/printer-setup.sh
+sudo chmod +x ./scripts/fetch-printer-supplies.sh
+sudo chmod +x ./scripts/get_dnp_supply.py
+
+# --- Setup One-time Printer Setup Service ---
+echo "Setting up one-time printer setup service..."
+sudo cp ./services/printer-setup.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable printer-setup.service
+
+
 # --- Launching Services ---
 echo "Enabling and starting CUPS and Avahi services..."
 sudo systemctl enable cups
@@ -69,15 +81,7 @@ sudo systemctl start avahi-daemon
 sudo systemctl enable snappic-print-server
 sudo systemctl restart snappic-print-server
 
-# --- Setup One-time Printer Setup Service ---
-echo "Setting up one-time printer setup service..."
-sudo cp ./services/printer-setup.service /etc/systemd/system/
-sudo chmod +x ./scripts/printer-setup.sh
-sudo systemctl daemon-reload
-sudo systemctl enable printer-setup.service
-
 # --- Reboot ---
-echo "Ethernet (eth0) will be prioritized over Wi-Fi (wlan0)."
 echo "Setup complete! Rebooting now to apply network changes..."
 sudo reboot
 

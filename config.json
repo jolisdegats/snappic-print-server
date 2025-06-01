@@ -1,3 +1,7 @@
 {
-  "dryRun": true
+  "dryRun": true,
+  "printerVID": "1452",
+  "printerPID": "9201",
+  "approximativeRemaining": 10,
+  "initialRemaining": 10
 }

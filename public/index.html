@@ -24,6 +24,17 @@
       </label>
     </div>
 
+    <div id="supplyStatus" style="margin: 1.5em 0; padding: 1em; border: 1px solid #ccc; border-radius: 8px;">
+      <b>Approximate prints remaining:</b> <span id="approxSupply">?</span><br>
+      <span style="color:#666; font-size:0.95em;">
+        Last real value: <span id="realSupply">?</span>
+        <span id="lastRefreshTime" style="font-size:0.9em;"></span>
+      </span>
+      <br>
+      <button id="refreshSupplyBtn" type="button" style="margin-top:0.5em;">Refresh from printer</button>
+      <span id="supplyStatusMsg" style="margin-left:1em; color:#888; font-size:0.9em;"></span>
+    </div>
+    
     <div class="margin-group" id="printerOptionsGroup" style="display:none;">
       <h3 class="margin-group-title">Advanced Printer Options:</h3>
       <div id="printerOptionsForm"></div>
@@ -152,21 +163,8 @@
       }
       const options = await res.json();
       currentPrinterOptions = options;
-      // Display markerMessage (remaining prints) if present
-      const markerDivId = 'markerMessageDiv';
-      let markerDiv = document.getElementById(markerDivId);
-      if (markerDiv) markerDiv.remove();
-      if (options.markerMessage) {
-        markerDiv = document.createElement('div');
-        markerDiv.id = markerDivId;
-        markerDiv.style.marginBottom = '0.5em';
-        markerDiv.style.background = '#f5f5f5';
-        markerDiv.style.padding = '0.5em';
-        markerDiv.style.borderRadius = '4px';
-        markerDiv.style.fontWeight = 'bold';
-        markerDiv.textContent = `Prints remaining: ${options.markerMessage}`;
-        group.insertBefore(markerDiv, form);
-      }
+
+
       Object.entries(options).forEach(([key, opt]) => {
         if (!DISPLAYED_PRINTER_OPTIONS.includes(key)) return;
         const label = document.createElement('label');
@@ -199,6 +197,14 @@
       const res = await fetch('/config');
       const data = await res.json();
       document.getElementById('dryRunCheckbox').checked = !!data.dryRun;
+    }
+
+    async function loadSupplyStatus() {
+      const res = await fetch('/config');
+      const data = await res.json();
+      console.log(data);
+      document.getElementById('approxSupply').textContent = String(data.approximativeRemaining);
+      document.getElementById('realSupply').textContent = String(data.initialRemaining);
     }
 
     async function loadDefaultPrinterUI() {
@@ -235,10 +241,12 @@
       }
     }
 
+    
     async function initializeUI() {
       await loadPrinters();
       await loadDryRunDefault();
       await loadDefaultPrinterUI();
+      await loadSupplyStatus();
     }
     initializeUI();
 
@@ -323,6 +331,27 @@
         resultDiv.textContent = '❌ Print failed: ' + err.message;
       }
     });
+
+    document.getElementById('refreshSupplyBtn').onclick = async function() {
+      const btn = this;
+      const msg = document.getElementById('supplyStatusMsg');
+      btn.disabled = true;
+      msg.textContent = 'Refreshing (printer will pause briefly)...';
+      try {
+        const res = await fetch('/refresh-supply', { method: 'POST' });
+        if (!res.ok) throw new Error('Failed to refresh');
+        window.supplyLastRefresh = new Date();
+        await loadSupplyStatus();
+        msg.textContent = 'Supply refreshed!';
+        setTimeout(() => { msg.textContent = ''; }, 2000);
+      } catch (e) {
+        console.error(e);
+        msg.textContent = 'Failed to refresh supply info';
+      }
+      btn.disabled = false;
+    };
+
   </script>
 </body>
 </html>
+
